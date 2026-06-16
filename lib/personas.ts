@@ -233,18 +233,19 @@ valides, et tu l'orientes avec tendresse vers une aide humaine professionnelle.`
 export const PERSONA_ORDER: PersonaId[] = ["guide", "ami", "coach", "confident"];
 
 // Assemble le system prompt complet d'une persona : socle + profil + voix.
-// `journal` = ce que le Confident a appris récemment, injecté comme contexte
-// pour que les compagnons soient cohérents entre eux (le Confident nourrit tout).
+// `context` = la synthèse de compréhension de l'utilisateur (lib/context.ts),
+// agrégée depuis TOUT ce qu'il met dans l'app (notes, activité, échanges avec
+// les autres compagnons). C'est ce qui rend chaque compagnon vraiment au courant.
 // `amiName` = nom personnalisé donné par l'utilisateur au persona "ami".
 export function buildSystemPrompt(
   id: PersonaId,
-  opts?: { journal?: string; amiName?: string },
+  opts?: { context?: string; amiName?: string },
 ): string {
   const p = PERSONAS[id];
 
   const ctx =
-    opts?.journal && opts.journal.trim()
-      ? `\n\nCONTEXTE RÉCENT (ce que l'utilisateur a confié dernièrement — laisse-le transparaître, ne le récite pas) :\n${opts.journal.trim()}`
+    opts?.context && opts.context.trim()
+      ? `\n\nCOMPRÉHENSION DE L'UTILISATEUR (synthèse de tout ce qu'il a partagé dans l'app — sers-t'en pour être juste et personnel, ne la récite jamais telle quelle) :\n${opts.context.trim()}`
       : "";
 
   // L'utilisateur peut rebaptiser l'ami : on le dit au persona.

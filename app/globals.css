@@ -419,9 +419,16 @@ textarea {
   background: var(--guide-soft);
   border-radius: 10px;
   padding: 9px 12px;
-  font-size: 14px;
+}
+.insight-title {
+  flex: 1;
+  text-align: left;
+  background: none;
+  border: none;
   color: #26215c;
+  font-size: 14px;
   line-height: 1.4;
+  padding: 0;
 }
 
 /* Dictée vocale */

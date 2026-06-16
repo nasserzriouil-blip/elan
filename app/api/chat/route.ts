@@ -8,7 +8,7 @@ const client = new Anthropic();
 interface ChatBody {
   personaId: PersonaId;
   messages: { role: "user" | "assistant"; content: string }[];
-  journal?: string;
+  context?: string;
   amiName?: string;
 }
 
@@ -20,7 +20,7 @@ export async function POST(req: Request) {
     return new Response("Requête invalide", { status: 400 });
   }
 
-  const { personaId, messages, journal, amiName } = body;
+  const { personaId, messages, context, amiName } = body;
 
   if (!personaId || !PERSONAS[personaId]) {
     return new Response("Persona inconnu", { status: 400 });
@@ -35,7 +35,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const system = buildSystemPrompt(personaId, { journal, amiName });
+  const system = buildSystemPrompt(personaId, { context, amiName });
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({

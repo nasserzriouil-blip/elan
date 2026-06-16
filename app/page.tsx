@@ -3,10 +3,18 @@
 import { useEffect, useRef, useState } from "react";
 import { PERSONAS, PERSONA_ORDER, type PersonaId } from "@/lib/personas";
 import { motDuJour, alimentDuJour } from "@/lib/daily";
+import {
+  type Msg,
+  type Convos,
+  type Insight,
+  dateKey,
+  computeStreak,
+  computeWeek,
+  buildUserContext,
+  hasSignal,
+} from "@/lib/context";
 
 type Tab = "home" | PersonaId;
-type Msg = { role: "user" | "assistant"; content: string };
-type Convos = Record<PersonaId, Msg[]>;
 
 const COLORS: Record<PersonaId, { ink: string; soft: string }> = {
   guide: { ink: "var(--guide)", soft: "var(--guide-soft)" },
@@ -17,17 +25,19 @@ const COLORS: Record<PersonaId, { ink: string; soft: string }> = {
 
 const emptyConvos: Convos = { guide: [], ami: [], coach: [], confident: [] };
 
-// Programme doux du jour : des actions d'identité, pas des objectifs chiffrés.
 const PROGRAM = [
   "Bouger ton corps, même 10 minutes",
   "Un verre d'eau de plus que d'habitude",
   "Un moment rien que pour toi",
 ];
 
-function dateKey(d = new Date()): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate(),
-  ).padStart(2, "0")}`;
+function fallbackTitle(t: string): string {
+  const w = t.trim().split(/\s+/).slice(0, 6).join(" ");
+  return w.length > 48 ? w.slice(0, 48) + "…" : w;
+}
+
+function newId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 }
 
 export default function App() {
@@ -37,10 +47,12 @@ export default function App() {
   const [streaming, setStreaming] = useState(false);
   const [amiName, setAmiName] = useState(PERSONAS.ami.name);
   const [program, setProgram] = useState<Record<string, boolean[]>>({});
-  const [insights, setInsights] = useState<string[]>([]);
+  const [insights, setInsights] = useState<Insight[]>([]);
+  const [dailyPhrase, setDailyPhrase] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
+  const phraseTried = useRef(false);
 
-  // Chargement local (beta : pas de compte).
   useEffect(() => {
     try {
       const c = localStorage.getItem("elan-convos");
@@ -50,10 +62,26 @@ export default function App() {
       const p = localStorage.getItem("elan-program");
       if (p) setProgram(JSON.parse(p));
       const ins = localStorage.getItem("elan-insights");
-      if (ins) setInsights(JSON.parse(ins));
+      if (ins) {
+        const parsed = JSON.parse(ins);
+        if (Array.isArray(parsed)) {
+          setInsights(
+            parsed.map((x: unknown) =>
+              typeof x === "string"
+                ? { id: newId(), title: fallbackTitle(x), text: x }
+                : {
+                    id: (x as Insight).id ?? newId(),
+                    title: (x as Insight).title ?? fallbackTitle((x as Insight).text ?? ""),
+                    text: (x as Insight).text ?? "",
+                  },
+            ),
+          );
+        }
+      }
     } catch {
       /* ignore */
     }
+    setLoaded(true);
   }, []);
 
   useEffect(() => {
@@ -67,6 +95,43 @@ export default function App() {
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
   }, [convos, tab, streaming]);
+
+  // Mot du jour personnalisé : 1 appel/jour max, mis en cache. Si pas assez de
+  // matière, on garde la phrase statique.
+  useEffect(() => {
+    if (!loaded || phraseTried.current) return;
+    phraseTried.current = true;
+    const today = dateKey();
+    const cacheKey = `elan-phrase-${today}`;
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        setDailyPhrase(cached);
+        return;
+      }
+    } catch {
+      /* ignore */
+    }
+    if (!hasSignal(convos, insights, program)) return;
+    const ctx = buildUserContext(convos, insights, program);
+    fetch("/api/daily-phrase", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ context: ctx }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.phrase) {
+          setDailyPhrase(d.phrase);
+          try {
+            localStorage.setItem(cacheKey, d.phrase);
+          } catch {
+            /* ignore */
+          }
+        }
+      })
+      .catch(() => {});
+  }, [loaded, convos, insights, program]);
 
   function displayName(id: PersonaId): string {
     return id === "ami" ? amiName : PERSONAS[id].name;
@@ -97,7 +162,7 @@ export default function App() {
     });
   }
 
-  function persistInsights(list: string[]) {
+  function persistInsights(list: Insight[]) {
     setInsights(list);
     try {
       localStorage.setItem("elan-insights", JSON.stringify(list));
@@ -105,22 +170,39 @@ export default function App() {
       /* ignore */
     }
   }
-  function addInsight(text: string) {
+
+  async function addInsight(text: string) {
     const t = text.trim();
-    if (t) persistInsights([t, ...insights].slice(0, 50));
-  }
-  function removeInsight(i: number) {
-    persistInsights(insights.filter((_, idx) => idx !== i));
+    if (!t) return;
+    const id = newId();
+    persistInsights([{ id, title: fallbackTitle(t), text: t }, ...insights].slice(0, 50));
+    try {
+      const res = await fetch("/api/summarize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: t }),
+      });
+      if (res.ok) {
+        const { title } = await res.json();
+        if (title) {
+          setInsights((prev) => {
+            const next = prev.map((x) => (x.id === id ? { ...x, title } : x));
+            try {
+              localStorage.setItem("elan-insights", JSON.stringify(next));
+            } catch {
+              /* ignore */
+            }
+            return next;
+          });
+        }
+      }
+    } catch {
+      /* on garde le titre de secours */
+    }
   }
 
-  // Le Confident nourrit les autres compagnons.
-  function journal(): string {
-    const c = convos.confident;
-    if (!c.length) return "";
-    return c
-      .slice(-6)
-      .map((m) => `${m.role === "user" ? "Lui" : "Confident"} : ${m.content}`)
-      .join("\n");
+  function removeInsight(id: string) {
+    persistInsights(insights.filter((x) => x.id !== id));
   }
 
   async function send(persona: PersonaId, text: string) {
@@ -143,7 +225,7 @@ export default function App() {
         body: JSON.stringify({
           personaId: persona,
           messages: history,
-          journal: persona === "confident" ? undefined : journal(),
+          context: buildUserContext(convos, insights, program, persona),
           amiName: persona === "ami" ? amiName : undefined,
         }),
       });
@@ -182,6 +264,7 @@ export default function App() {
       <div className="phone">
         {tab === "home" ? (
           <Home
+            phrase={dailyPhrase ?? motDuJour()}
             program={program[dateKey()] ?? PROGRAM.map(() => false)}
             streak={computeStreak(program)}
             weekCount={computeWeek(program)}
@@ -232,40 +315,16 @@ export default function App() {
   );
 }
 
-function computeStreak(map: Record<string, boolean[]>): number {
-  const active = (d: Date) => (map[dateKey(d)] ?? []).some(Boolean);
-  const cur = new Date();
-  if (!active(cur)) cur.setDate(cur.getDate() - 1); // aujourd'hui pas encore fait : on regarde la série qui finit hier
-  let n = 0;
-  while (active(cur)) {
-    n++;
-    cur.setDate(cur.getDate() - 1);
-  }
-  return n;
-}
-
-function computeWeek(map: Record<string, boolean[]>): number {
-  let n = 0;
-  const d = new Date();
-  for (let i = 0; i < 7; i++) {
-    if ((map[dateKey(d)] ?? []).some(Boolean)) n++;
-    d.setDate(d.getDate() - 1);
-  }
-  return n;
-}
-
 interface Achievement {
   label: string;
   desc: string;
 }
 
-// Victoires débloquées à partir de l'activité réelle (jamais le poids).
 function computeAchievements(map: Record<string, boolean[]>): Achievement[] {
   const days = Object.values(map);
   const totalDays = days.filter((d) => d.some(Boolean)).length;
   const fullDays = days.filter((d) => d.length >= PROGRAM.length && d.every(Boolean)).length;
 
-  // Meilleure série jamais atteinte.
   const keys = Object.keys(map)
     .filter((k) => (map[k] ?? []).some(Boolean))
     .sort();
@@ -279,7 +338,7 @@ function computeAchievements(map: Record<string, boolean[]>): Achievement[] {
     prev = t;
   }
 
-  const all: { label: string; desc: string; earned: boolean }[] = [
+  const all = [
     { label: "Premier geste", desc: "Tu as commencé. C'est le plus dur.", earned: totalDays >= 1 },
     { label: "Trois jours d'affilée", desc: "La régularité douce s'installe.", earned: best >= 3 },
     { label: "Semaine vivante", desc: "5 jours à prendre soin de toi cette semaine.", earned: computeWeek(map) >= 5 },
@@ -290,6 +349,7 @@ function computeAchievements(map: Record<string, boolean[]>): Achievement[] {
 }
 
 function Home({
+  phrase,
   program,
   streak,
   weekCount,
@@ -299,16 +359,18 @@ function Home({
   onAddInsight,
   onRemoveInsight,
 }: {
+  phrase: string;
   program: boolean[];
   streak: number;
   weekCount: number;
   achievements: Achievement[];
-  insights: string[];
+  insights: Insight[];
   onToggle: (i: number) => void;
   onAddInsight: (text: string) => void;
-  onRemoveInsight: (i: number) => void;
+  onRemoveInsight: (id: string) => void;
 }) {
   const [draft, setDraft] = useState("");
+  const [open, setOpen] = useState<string | null>(null);
   const aliment = alimentDuJour();
 
   return (
@@ -319,7 +381,7 @@ function Home({
 
         <div className="mot">
           <div className="k">Le mot du jour</div>
-          <div className="p">{motDuJour()}</div>
+          <div className="p">{phrase}</div>
         </div>
 
         <div className="metrics">
@@ -380,9 +442,7 @@ function Home({
 
         <div className="section-h">L&apos;aliment du jour</div>
         <div className="card" style={{ background: "var(--coach-soft)", border: "none" }}>
-          <div style={{ fontSize: 16, fontWeight: 600, color: "var(--coach)" }}>
-            {aliment.nom}
-          </div>
+          <div style={{ fontSize: 16, fontWeight: 600, color: "var(--coach)" }}>{aliment.nom}</div>
           <div style={{ fontSize: 14, color: "#0f6e56", lineHeight: 1.5, margin: "4px 0 12px" }}>
             {aliment.benefice}
           </div>
@@ -423,15 +483,24 @@ function Home({
           </div>
           {insights.length === 0 ? (
             <div style={{ fontSize: 13, color: "var(--ink-faint)", marginTop: 10, lineHeight: 1.4 }}>
-              Note ici ce que tu réalises au fil du chemin. Ce sont tes repères à
-              toi — ceux qui tiennent quand la motivation flanche.
+              Note ici ce que tu réalises au fil du chemin. Élan en fait des
+              titres courts, et s&apos;en sert pour mieux te comprendre.
             </div>
           ) : (
             <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
-              {insights.map((t, i) => (
-                <div className="insight" key={i}>
-                  <span>{t}</span>
-                  <button className="icon-btn" aria-label="Supprimer" onClick={() => onRemoveInsight(i)}>
+              {insights.map((it) => (
+                <div className="insight" key={it.id}>
+                  <button
+                    className="insight-title"
+                    onClick={() => setOpen(open === it.id ? null : it.id)}
+                  >
+                    {open === it.id ? it.text : it.title}
+                  </button>
+                  <button
+                    className="icon-btn"
+                    aria-label="Supprimer"
+                    onClick={() => onRemoveInsight(it.id)}
+                  >
                     ×
                   </button>
                 </div>
@@ -479,7 +548,6 @@ function Chat({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name);
 
-  // Dictée vocale (Web Speech API), seulement si le navigateur la supporte.
   const [voiceOk, setVoiceOk] = useState(false);
   const [recording, setRecording] = useState(false);
   const recRef = useRef<unknown>(null);
@@ -507,7 +575,7 @@ function Chat({
     recRef.current = rec;
     rec.lang = "fr-FR";
     rec.interimResults = true;
-    rec.continuous = true; // écoute en continu jusqu'à ce que tu arrêtes
+    rec.continuous = true;
     const base = input ? input.trim() + " " : "";
     let manualStop = false;
     rec.onresult = (e: any) => {
@@ -515,8 +583,6 @@ function Chat({
       for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
       setInput(base + t);
     };
-    // Certains navigateurs coupent quand même sur un silence : on relance tant
-    // que l'utilisateur n'a pas appuyé sur stop.
     rec.onend = () => {
       if (manualStop) {
         setRecording(false);
@@ -529,7 +595,6 @@ function Chat({
       }
     };
     rec.onerror = () => setRecording(false);
-    // Surcharge stop pour marquer l'arrêt volontaire.
     (recRef.current as { _manualStop?: () => void })._manualStop = () => {
       manualStop = true;
       rec.stop();
