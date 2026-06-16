@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { PERSONAS, PERSONA_ORDER, type PersonaId } from "@/lib/personas";
-import { motDuJour } from "@/lib/daily";
+import { motDuJour, alimentDuJour } from "@/lib/daily";
 
 type Tab = "home" | PersonaId;
 type Msg = { role: "user" | "assistant"; content: string };
@@ -37,6 +37,7 @@ export default function App() {
   const [streaming, setStreaming] = useState(false);
   const [amiName, setAmiName] = useState(PERSONAS.ami.name);
   const [program, setProgram] = useState<Record<string, boolean[]>>({});
+  const [insights, setInsights] = useState<string[]>([]);
   const threadRef = useRef<HTMLDivElement>(null);
 
   // Chargement local (beta : pas de compte).
@@ -48,6 +49,8 @@ export default function App() {
       if (n) setAmiName(n);
       const p = localStorage.getItem("elan-program");
       if (p) setProgram(JSON.parse(p));
+      const ins = localStorage.getItem("elan-insights");
+      if (ins) setInsights(JSON.parse(ins));
     } catch {
       /* ignore */
     }
@@ -92,6 +95,22 @@ export default function App() {
       }
       return next;
     });
+  }
+
+  function persistInsights(list: string[]) {
+    setInsights(list);
+    try {
+      localStorage.setItem("elan-insights", JSON.stringify(list));
+    } catch {
+      /* ignore */
+    }
+  }
+  function addInsight(text: string) {
+    const t = text.trim();
+    if (t) persistInsights([t, ...insights].slice(0, 50));
+  }
+  function removeInsight(i: number) {
+    persistInsights(insights.filter((_, idx) => idx !== i));
   }
 
   // Le Confident nourrit les autres compagnons.
@@ -166,9 +185,11 @@ export default function App() {
             program={program[dateKey()] ?? PROGRAM.map(() => false)}
             streak={computeStreak(program)}
             weekCount={computeWeek(program)}
+            achievements={computeAchievements(program)}
+            insights={insights}
             onToggle={toggleProgram}
-            onOpen={setTab}
-            displayName={displayName}
+            onAddInsight={addInsight}
+            onRemoveInsight={removeInsight}
           />
         ) : (
           <Chat
@@ -233,21 +254,63 @@ function computeWeek(map: Record<string, boolean[]>): number {
   return n;
 }
 
+interface Achievement {
+  label: string;
+  desc: string;
+}
+
+// Victoires débloquées à partir de l'activité réelle (jamais le poids).
+function computeAchievements(map: Record<string, boolean[]>): Achievement[] {
+  const days = Object.values(map);
+  const totalDays = days.filter((d) => d.some(Boolean)).length;
+  const fullDays = days.filter((d) => d.length >= PROGRAM.length && d.every(Boolean)).length;
+
+  // Meilleure série jamais atteinte.
+  const keys = Object.keys(map)
+    .filter((k) => (map[k] ?? []).some(Boolean))
+    .sort();
+  let best = 0;
+  let run = 0;
+  let prev: number | null = null;
+  for (const k of keys) {
+    const t = new Date(k + "T00:00:00").getTime() / 86400000;
+    run = prev !== null && Math.round(t - prev) === 1 ? run + 1 : 1;
+    best = Math.max(best, run);
+    prev = t;
+  }
+
+  const all: { label: string; desc: string; earned: boolean }[] = [
+    { label: "Premier geste", desc: "Tu as commencé. C'est le plus dur.", earned: totalDays >= 1 },
+    { label: "Trois jours d'affilée", desc: "La régularité douce s'installe.", earned: best >= 3 },
+    { label: "Semaine vivante", desc: "5 jours à prendre soin de toi cette semaine.", earned: computeWeek(map) >= 5 },
+    { label: "Journée complète", desc: "Un jour où tu as tout coché.", earned: fullDays >= 1 },
+    { label: "Dix jours pour toi", desc: "Ce n'est plus un essai, c'est une habitude.", earned: totalDays >= 10 },
+  ];
+  return all.filter((a) => a.earned).map(({ label, desc }) => ({ label, desc }));
+}
+
 function Home({
   program,
   streak,
   weekCount,
+  achievements,
+  insights,
   onToggle,
-  onOpen,
-  displayName,
+  onAddInsight,
+  onRemoveInsight,
 }: {
   program: boolean[];
   streak: number;
   weekCount: number;
+  achievements: Achievement[];
+  insights: string[];
   onToggle: (i: number) => void;
-  onOpen: (t: Tab) => void;
-  displayName: (id: PersonaId) => string;
+  onAddInsight: (text: string) => void;
+  onRemoveInsight: (i: number) => void;
 }) {
+  const [draft, setDraft] = useState("");
+  const aliment = alimentDuJour();
+
   return (
     <div className="screen">
       <div className="home-pad">
@@ -289,37 +352,93 @@ function Home({
               </button>
             );
           })}
-          <div
-            style={{
-              fontSize: 12,
-              color: "var(--ink-faint)",
-              marginTop: 10,
-              lineHeight: 1.4,
-            }}
-          >
+          <div style={{ fontSize: 12, color: "var(--ink-faint)", marginTop: 10, lineHeight: 1.4 }}>
             Rien d&apos;obligatoire. Coche ce qui s&apos;est fait — on célèbre les
             gestes, pas les chiffres.
           </div>
         </div>
 
-        <div style={{ fontSize: 12, color: "var(--ink-faint)", margin: "16px 0 8px" }}>
-          Tes compagnons
+        <div className="section-h">Tes victoires</div>
+        {achievements.length === 0 ? (
+          <div className="card">
+            <div style={{ fontSize: 14, color: "var(--ink-soft)", lineHeight: 1.5 }}>
+              Tes premières victoires apparaîtront ici dès que tu cocheras une
+              action. Pas de performance — juste des preuves que tu avances.
+            </div>
+          </div>
+        ) : (
+          achievements.map((a) => (
+            <div className="achv" key={a.label}>
+              <span className="badge">★</span>
+              <div>
+                <div className="achv-t">{a.label}</div>
+                <div className="achv-d">{a.desc}</div>
+              </div>
+            </div>
+          ))
+        )}
+
+        <div className="section-h">L&apos;aliment du jour</div>
+        <div className="card" style={{ background: "var(--coach-soft)", border: "none" }}>
+          <div style={{ fontSize: 16, fontWeight: 600, color: "var(--coach)" }}>
+            {aliment.nom}
+          </div>
+          <div style={{ fontSize: 14, color: "#0f6e56", lineHeight: 1.5, margin: "4px 0 12px" }}>
+            {aliment.benefice}
+          </div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--coach)", marginBottom: 6 }}>
+            Recette protéinée — {aliment.recette}
+          </div>
+          <ol className="recipe">
+            {aliment.etapes.map((e, i) => (
+              <li key={i}>{e}</li>
+            ))}
+          </ol>
         </div>
-        {PERSONA_ORDER.map((id) => (
-          <button key={id} className="companion-row" onClick={() => onOpen(id)}>
-            <span
-              className="avatar"
-              style={{ background: COLORS[id].soft, color: COLORS[id].ink }}
+
+        <div className="section-h">Ce que j&apos;ai compris</div>
+        <div className="card">
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              className="insight-in"
+              value={draft}
+              placeholder="Une prise de conscience, une leçon…"
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  onAddInsight(draft);
+                  setDraft("");
+                }
+              }}
+            />
+            <button
+              className="add-btn"
+              onClick={() => {
+                onAddInsight(draft);
+                setDraft("");
+              }}
             >
-              {displayName(id)[0]}
-            </span>
-            <span className="meta">
-              <div className="n">{displayName(id)}</div>
-              <div className="t">{PERSONAS[id].tagline}</div>
-            </span>
-            <span className="chev">›</span>
-          </button>
-        ))}
+              +
+            </button>
+          </div>
+          {insights.length === 0 ? (
+            <div style={{ fontSize: 13, color: "var(--ink-faint)", marginTop: 10, lineHeight: 1.4 }}>
+              Note ici ce que tu réalises au fil du chemin. Ce sont tes repères à
+              toi — ceux qui tiennent quand la motivation flanche.
+            </div>
+          ) : (
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+              {insights.map((t, i) => (
+                <div className="insight" key={i}>
+                  <span>{t}</span>
+                  <button className="icon-btn" aria-label="Supprimer" onClick={() => onRemoveInsight(i)}>
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -378,7 +497,9 @@ function Chat({
     if (!Ctor) return;
 
     if (recording) {
-      (recRef.current as { stop?: () => void } | null)?.stop?.();
+      const r = recRef.current as { _manualStop?: () => void; stop?: () => void } | null;
+      if (r?._manualStop) r._manualStop();
+      else r?.stop?.();
       return;
     }
 
@@ -386,15 +507,33 @@ function Chat({
     recRef.current = rec;
     rec.lang = "fr-FR";
     rec.interimResults = true;
-    rec.continuous = false;
-    const base = input ? input + " " : "";
+    rec.continuous = true; // écoute en continu jusqu'à ce que tu arrêtes
+    const base = input ? input.trim() + " " : "";
+    let manualStop = false;
     rec.onresult = (e: any) => {
       let t = "";
       for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
       setInput(base + t);
     };
-    rec.onend = () => setRecording(false);
+    // Certains navigateurs coupent quand même sur un silence : on relance tant
+    // que l'utilisateur n'a pas appuyé sur stop.
+    rec.onend = () => {
+      if (manualStop) {
+        setRecording(false);
+      } else {
+        try {
+          rec.start();
+        } catch {
+          setRecording(false);
+        }
+      }
+    };
     rec.onerror = () => setRecording(false);
+    // Surcharge stop pour marquer l'arrêt volontaire.
+    (recRef.current as { _manualStop?: () => void })._manualStop = () => {
+      manualStop = true;
+      rec.stop();
+    };
     setRecording(true);
     rec.start();
   }
