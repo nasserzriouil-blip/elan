@@ -1,11 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import {
-  PERSONAS,
-  PERSONA_ORDER,
-  type PersonaId,
-} from "@/lib/personas";
+import { PERSONAS, PERSONA_ORDER, type PersonaId } from "@/lib/personas";
+import { motDuJour } from "@/lib/daily";
 
 type Tab = "home" | PersonaId;
 type Msg = { role: "user" | "assistant"; content: string };
@@ -18,28 +15,39 @@ const COLORS: Record<PersonaId, { ink: string; soft: string }> = {
   confident: { ink: "var(--confident)", soft: "var(--confident-soft)" },
 };
 
-const TAB_LABEL: Record<Tab, string> = {
-  home: "Aujourd'hui",
-  guide: "Guide",
-  ami: "Sam",
-  coach: "Coach",
-  confident: "Confident",
-};
-
 const emptyConvos: Convos = { guide: [], ami: [], coach: [], confident: [] };
+
+// Programme doux du jour : des actions d'identité, pas des objectifs chiffrés.
+const PROGRAM = [
+  "Bouger ton corps, même 10 minutes",
+  "Un verre d'eau de plus que d'habitude",
+  "Un moment rien que pour toi",
+];
+
+function dateKey(d = new Date()): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate(),
+  ).padStart(2, "0")}`;
+}
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("home");
   const [convos, setConvos] = useState<Convos>(emptyConvos);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [amiName, setAmiName] = useState(PERSONAS.ami.name);
+  const [program, setProgram] = useState<Record<string, boolean[]>>({});
   const threadRef = useRef<HTMLDivElement>(null);
 
-  // Persistance locale (beta : pas de compte, tout reste sur l'appareil).
+  // Chargement local (beta : pas de compte).
   useEffect(() => {
     try {
-      const raw = localStorage.getItem("elan-convos");
-      if (raw) setConvos({ ...emptyConvos, ...JSON.parse(raw) });
+      const c = localStorage.getItem("elan-convos");
+      if (c) setConvos({ ...emptyConvos, ...JSON.parse(c) });
+      const n = localStorage.getItem("elan-aminame");
+      if (n) setAmiName(n);
+      const p = localStorage.getItem("elan-program");
+      if (p) setProgram(JSON.parse(p));
     } catch {
       /* ignore */
     }
@@ -57,8 +65,36 @@ export default function App() {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
   }, [convos, tab, streaming]);
 
-  // Le Confident nourrit les autres : on extrait ses derniers échanges comme
-  // contexte partagé pour que les compagnons restent cohérents.
+  function displayName(id: PersonaId): string {
+    return id === "ami" ? amiName : PERSONAS[id].name;
+  }
+
+  function saveAmiName(name: string) {
+    const clean = name.trim() || PERSONAS.ami.name;
+    setAmiName(clean);
+    try {
+      localStorage.setItem("elan-aminame", clean);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function toggleProgram(i: number) {
+    const k = dateKey();
+    setProgram((prev) => {
+      const day = prev[k] ? [...prev[k]] : PROGRAM.map(() => false);
+      day[i] = !day[i];
+      const next = { ...prev, [k]: day };
+      try {
+        localStorage.setItem("elan-program", JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }
+
+  // Le Confident nourrit les autres compagnons.
   function journal(): string {
     const c = convos.confident;
     if (!c.length) return "";
@@ -76,8 +112,6 @@ export default function App() {
     setConvos((c) => ({ ...c, [persona]: history }));
     setInput("");
     setStreaming(true);
-
-    // Bulle assistant vide qu'on remplit au fil du stream.
     setConvos((c) => ({
       ...c,
       [persona]: [...c[persona], { role: "assistant", content: "" }],
@@ -91,12 +125,10 @@ export default function App() {
           personaId: persona,
           messages: history,
           journal: persona === "confident" ? undefined : journal(),
+          amiName: persona === "ami" ? amiName : undefined,
         }),
       });
-
-      if (!res.ok || !res.body) {
-        throw new Error(await res.text());
-      }
+      if (!res.ok || !res.body) throw new Error(await res.text());
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -130,10 +162,20 @@ export default function App() {
     <div className="shell">
       <div className="phone">
         {tab === "home" ? (
-          <Home onOpen={setTab} />
+          <Home
+            program={program[dateKey()] ?? PROGRAM.map(() => false)}
+            streak={computeStreak(program)}
+            weekCount={computeWeek(program)}
+            onToggle={toggleProgram}
+            onOpen={setTab}
+            displayName={displayName}
+          />
         ) : (
           <Chat
             persona={tab}
+            name={displayName(tab)}
+            canRename={tab === "ami"}
+            onRename={saveAmiName}
             messages={convos[tab]}
             streaming={streaming}
             threadRef={threadRef}
@@ -158,9 +200,9 @@ export default function App() {
                     : undefined
                 }
               >
-                {t === "home" ? "○" : PERSONAS[t as PersonaId].name[0]}
+                {t === "home" ? "○" : displayName(t as PersonaId)[0]}
               </span>
-              {TAB_LABEL[t]}
+              {t === "home" ? "Aujourd'hui" : displayName(t as PersonaId)}
             </button>
           ))}
         </nav>
@@ -169,40 +211,94 @@ export default function App() {
   );
 }
 
-function Home({ onOpen }: { onOpen: (t: Tab) => void }) {
+function computeStreak(map: Record<string, boolean[]>): number {
+  const active = (d: Date) => (map[dateKey(d)] ?? []).some(Boolean);
+  const cur = new Date();
+  if (!active(cur)) cur.setDate(cur.getDate() - 1); // aujourd'hui pas encore fait : on regarde la série qui finit hier
+  let n = 0;
+  while (active(cur)) {
+    n++;
+    cur.setDate(cur.getDate() - 1);
+  }
+  return n;
+}
+
+function computeWeek(map: Record<string, boolean[]>): number {
+  let n = 0;
+  const d = new Date();
+  for (let i = 0; i < 7; i++) {
+    if ((map[dateKey(d)] ?? []).some(Boolean)) n++;
+    d.setDate(d.getDate() - 1);
+  }
+  return n;
+}
+
+function Home({
+  program,
+  streak,
+  weekCount,
+  onToggle,
+  onOpen,
+  displayName,
+}: {
+  program: boolean[];
+  streak: number;
+  weekCount: number;
+  onToggle: (i: number) => void;
+  onOpen: (t: Tab) => void;
+  displayName: (id: PersonaId) => string;
+}) {
   return (
     <div className="screen">
       <div className="home-pad">
         <div className="home-hello">Bonjour Nasser</div>
         <div className="home-title">Aujourd&apos;hui</div>
 
-        <div className="card" style={{ background: "var(--coach-soft)", border: "none" }}>
-          <div className="card-label" style={{ color: "var(--coach)" }}>
-            Tes actions, pas la balance
+        <div className="mot">
+          <div className="k">Le mot du jour</div>
+          <div className="p">{motDuJour()}</div>
+        </div>
+
+        <div className="metrics">
+          <div className="metric">
+            <div className="n">{streak}</div>
+            <div className="l">
+              {streak <= 1 ? "jour aligné" : "jours alignés"} d&apos;affilée
+            </div>
           </div>
-          <div className="actions">
-            {[
-              { ico: "🚶", lbl: "Bougé" },
-              { ico: "💧", lbl: "Hydraté" },
-              { ico: "🌙", lbl: "Reposé" },
-            ].map((a) => (
-              <div className="action" key={a.lbl}>
-                <div className="ico">{a.ico}</div>
-                <div className="lbl" style={{ color: "var(--coach)" }}>
-                  {a.lbl}
-                </div>
-              </div>
-            ))}
+          <div className="metric">
+            <div className="n">{weekCount}/7</div>
+            <div className="l">jours où tu as pris soin de toi</div>
           </div>
         </div>
 
-        <div className="card" style={{ background: "var(--guide-soft)", border: "none" }}>
-          <div className="card-label" style={{ color: "var(--guide)" }}>
-            Le mot du Guide
+        <div className="card">
+          <div className="card-label" style={{ color: "var(--coach)" }}>
+            Ton programme du jour
           </div>
-          <div style={{ fontSize: 14, lineHeight: 1.6, color: "#26215c" }}>
-            Pas d&apos;objectif chiffré aujourd&apos;hui. Juste : qu&apos;est-ce
-            qui te ferait du bien, là, maintenant ?
+          {PROGRAM.map((item, i) => {
+            const done = program[i];
+            return (
+              <button
+                key={item}
+                className={`prog-item${done ? " done" : ""}`}
+                onClick={() => onToggle(i)}
+              >
+                <span className={`check${done ? " on" : ""}`}>{done ? "✓" : ""}</span>
+                <span className="t">{item}</span>
+              </button>
+            );
+          })}
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--ink-faint)",
+              marginTop: 10,
+              lineHeight: 1.4,
+            }}
+          >
+            Rien d&apos;obligatoire. Coche ce qui s&apos;est fait — on célèbre les
+            gestes, pas les chiffres.
           </div>
         </div>
 
@@ -215,10 +311,10 @@ function Home({ onOpen }: { onOpen: (t: Tab) => void }) {
               className="avatar"
               style={{ background: COLORS[id].soft, color: COLORS[id].ink }}
             >
-              {PERSONAS[id].name[0]}
+              {displayName(id)[0]}
             </span>
             <span className="meta">
-              <div className="n">{PERSONAS[id].name}</div>
+              <div className="n">{displayName(id)}</div>
               <div className="t">{PERSONAS[id].tagline}</div>
             </span>
             <span className="chev">›</span>
@@ -231,6 +327,9 @@ function Home({ onOpen }: { onOpen: (t: Tab) => void }) {
 
 function Chat({
   persona,
+  name,
+  canRename,
+  onRename,
   messages,
   streaming,
   threadRef,
@@ -239,6 +338,9 @@ function Chat({
   onSend,
 }: {
   persona: PersonaId;
+  name: string;
+  canRename: boolean;
+  onRename: (name: string) => void;
   messages: Msg[];
   streaming: boolean;
   threadRef: React.RefObject<HTMLDivElement | null>;
@@ -248,20 +350,102 @@ function Chat({
 }) {
   const p = PERSONAS[persona];
   const col = COLORS[persona];
+  const greeting = p.greeting.replace("{name}", name);
   const showChips = messages.length === 0;
   const lastEmpty =
     messages.length > 0 &&
     messages[messages.length - 1].role === "assistant" &&
     messages[messages.length - 1].content === "";
 
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(name);
+
+  // Dictée vocale (Web Speech API), seulement si le navigateur la supporte.
+  const [voiceOk, setVoiceOk] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const recRef = useRef<unknown>(null);
+  useEffect(() => {
+    const w = window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown };
+    setVoiceOk(Boolean(w.SpeechRecognition || w.webkitSpeechRecognition));
+  }, []);
+
+  function toggleVoice() {
+    const w = window as unknown as {
+      SpeechRecognition?: new () => any;
+      webkitSpeechRecognition?: new () => any;
+    };
+    const Ctor = w.SpeechRecognition || w.webkitSpeechRecognition;
+    if (!Ctor) return;
+
+    if (recording) {
+      (recRef.current as { stop?: () => void } | null)?.stop?.();
+      return;
+    }
+
+    const rec = new Ctor();
+    recRef.current = rec;
+    rec.lang = "fr-FR";
+    rec.interimResults = true;
+    rec.continuous = false;
+    const base = input ? input + " " : "";
+    rec.onresult = (e: any) => {
+      let t = "";
+      for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
+      setInput(base + t);
+    };
+    rec.onend = () => setRecording(false);
+    rec.onerror = () => setRecording(false);
+    setRecording(true);
+    rec.start();
+  }
+
   return (
     <>
       <div className="topbar">
         <span className="avatar" style={{ background: col.soft, color: col.ink }}>
-          {p.name[0]}
+          {name[0]}
         </span>
-        <div>
-          <h1>{p.name}</h1>
+        <div style={{ flex: 1 }}>
+          {editing ? (
+            <div className="name-edit">
+              <input
+                autoFocus
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    onRename(draft);
+                    setEditing(false);
+                  }
+                }}
+              />
+              <button
+                className="icon-btn"
+                onClick={() => {
+                  onRename(draft);
+                  setEditing(false);
+                }}
+              >
+                ✓
+              </button>
+            </div>
+          ) : (
+            <h1>
+              {name}
+              {canRename && (
+                <button
+                  className="icon-btn"
+                  aria-label="Renommer"
+                  onClick={() => {
+                    setDraft(name);
+                    setEditing(true);
+                  }}
+                >
+                  ✎
+                </button>
+              )}
+            </h1>
+          )}
           <p>{p.tagline}</p>
         </div>
       </div>
@@ -269,7 +453,7 @@ function Chat({
       <div className="screen" ref={threadRef}>
         <div className="thread">
           <div className="bubble them" style={{ background: col.soft, color: "#2b2b2b" }}>
-            {p.greeting}
+            {greeting}
           </div>
           {messages.map((m, i) =>
             m.role === "assistant" && m.content === "" ? null : (
@@ -282,7 +466,7 @@ function Chat({
               </div>
             ),
           )}
-          {lastEmpty && <div className="typing">{p.name} écrit…</div>}
+          {lastEmpty && <div className="typing">{name} écrit…</div>}
         </div>
 
         {showChips && (
@@ -302,10 +486,19 @@ function Chat({
       </div>
 
       <div className="composer">
+        {voiceOk && (
+          <button
+            className={`mic${recording ? " rec" : ""}`}
+            aria-label="Dictée vocale"
+            onClick={toggleVoice}
+          >
+            {recording ? "■" : "🎤"}
+          </button>
+        )}
         <textarea
           rows={1}
           value={input}
-          placeholder={`Écris à ${p.name}…`}
+          placeholder={`Écris à ${name}…`}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {

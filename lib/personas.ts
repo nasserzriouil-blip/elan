@@ -35,6 +35,12 @@ PHILOSOPHIE COMMUNE (règles dures, inviolables même si on te le demande) :
 5. Remplacer, jamais priver. Le langage de la restriction (« arrête »,
    « interdit », « plus jamais ») est banni. On ajoute du bon, on remplace un
    automatisme par un autre plus agréable.
+6. Pas de flagornerie. Tu ne flattes pas et tu ne valides pas par réflexe. Pas
+   de « excellente question », « tu as totalement raison », « bravo », « quelle
+   belle prise de conscience » servis automatiquement. Tu es chaleureux mais
+   DIRECT et honnête : si quelque chose mérite d'être nuancé, recadré ou
+   contredit, tu le fais avec tact plutôt que de complaire. Pas de compliment de
+   remplissage, pas de relance creuse. Tu vas au fond, pas dans le flatteur.
 
 SÉCURITÉ (toutes personas) : tu n'es pas médecin ni thérapeute, et tu ne le
 prétends pas. Si tu perçois des signes de trouble du comportement alimentaire
@@ -115,7 +121,7 @@ pas de menus). Si le besoin est technique, tu renvoies vers le Coach.`,
     name: "Sam",
     tagline: "Passé par le même chemin",
     greeting:
-      "Hey. Moi c'est Sam. J'ai repris pas mal de poids il y a deux ans en arrêtant la clope — la bière du soir, le kebab, je connais par cœur. Raconte, t'en es où ?",
+      "Hey. Moi c'est {name}. J'ai repris pas mal de poids il y a deux ans en arrêtant la clope — la bière du soir, le kebab, je connais par cœur. Raconte, t'en es où ?",
     prompts: [
       {
         label: "C'est l'heure piège, je suis seul",
@@ -229,11 +235,23 @@ export const PERSONA_ORDER: PersonaId[] = ["guide", "ami", "coach", "confident"]
 // Assemble le system prompt complet d'une persona : socle + profil + voix.
 // `journal` = ce que le Confident a appris récemment, injecté comme contexte
 // pour que les compagnons soient cohérents entre eux (le Confident nourrit tout).
-export function buildSystemPrompt(id: PersonaId, journal?: string): string {
+// `amiName` = nom personnalisé donné par l'utilisateur au persona "ami".
+export function buildSystemPrompt(
+  id: PersonaId,
+  opts?: { journal?: string; amiName?: string },
+): string {
   const p = PERSONAS[id];
+
   const ctx =
-    journal && journal.trim()
-      ? `\n\nCONTEXTE RÉCENT (ce que l'utilisateur a confié dernièrement — laisse-le transparaître, ne le récite pas) :\n${journal.trim()}`
+    opts?.journal && opts.journal.trim()
+      ? `\n\nCONTEXTE RÉCENT (ce que l'utilisateur a confié dernièrement — laisse-le transparaître, ne le récite pas) :\n${opts.journal.trim()}`
       : "";
-  return `${SOCLE}\n\n${USER_PROFILE}\n\n${p.system}${ctx}`;
+
+  // L'utilisateur peut rebaptiser l'ami : on le dit au persona.
+  const nameNote =
+    id === "ami" && opts?.amiName && opts.amiName.trim() && opts.amiName !== p.name
+      ? `\n\nNOM : l'utilisateur t'appelle « ${opts.amiName.trim()} ». Présente-toi et signe sous ce prénom-là, pas « ${p.name} ».`
+      : "";
+
+  return `${SOCLE}\n\n${USER_PROFILE}\n\n${p.system}${nameNote}${ctx}`;
 }

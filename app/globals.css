@@ -263,6 +263,130 @@ textarea {
   opacity: 0.4;
 }
 
+/* Mot du jour */
+.mot {
+  background: var(--guide-soft);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.mot .k {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--guide);
+  margin-bottom: 6px;
+}
+.mot .p {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 18px;
+  line-height: 1.5;
+  color: #26215c;
+}
+
+/* Insights */
+.metrics {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.metric {
+  flex: 1;
+  background: var(--surface);
+  border: 0.5px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.metric .n {
+  font-size: 24px;
+  font-weight: 600;
+}
+.metric .l {
+  font-size: 12px;
+  color: var(--ink-soft);
+  line-height: 1.3;
+  margin-top: 2px;
+}
+
+/* Programme du jour */
+.prog-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 0;
+  border-top: 0.5px solid var(--line);
+  width: 100%;
+  background: none;
+  text-align: left;
+}
+.prog-item:first-of-type {
+  border-top: none;
+}
+.check {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: #fff;
+  font-size: 14px;
+}
+.check.on {
+  background: var(--coach);
+  border-color: var(--coach);
+}
+.prog-item .t {
+  font-size: 14px;
+}
+.prog-item.done .t {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+
+/* Dictée vocale */
+.mic {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 0.5px solid var(--line);
+  background: var(--bg);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  color: var(--ink-soft);
+}
+.mic.rec {
+  background: #fdeaea;
+  border-color: #e24b4a;
+  color: #e24b4a;
+}
+
+/* Renommage */
+.name-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.name-edit input {
+  width: 130px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  border: 0.5px solid var(--line);
+  font-size: 15px;
+}
+.icon-btn {
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  font-size: 14px;
+  padding: 2px 4px;
+}
+
 /* Tab bar */
 .tabbar {
   display: flex;
